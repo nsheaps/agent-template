@@ -1,0 +1,16 @@
+# Scheduled tasks — persisted across session restarts.
+#
+# Crons created at runtime with CronCreate are session-only and die on restart.
+# This file is the durable source of truth; the scheduled-tasks rule restores
+# every enabled task on session start (deduping against CronList first).
+#
+# Schema per task:
+#   - id:        stable slug (unique)
+#     cron:      cron expression (e.g. "0 14 * * *" = 14:00 UTC daily)
+#     enabled:   true | false
+#     recurring: true (survives restarts) | false (one-shot)
+#     prompt:    what to do when it fires — ALWAYS invoke a skill rather than
+#                hardcoding behavior here (keeps logic in one place).
+#
+# Start empty; add tasks as the agent acquires scheduled responsibilities.
+tasks: []

@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+# bin/agent — thin shim. Resolves the agent name from agent.yaml and delegates
+# to the canonical launcher provided by nsheaps/agents.
+#
+# This shim is intentionally generic and (aside from the resolution block) is
+# byte-identical to the one carried by alex/henry/jack. Edit the canonical
+# launcher, not this shim, for behavior changes.
+#
+# Source of truth for the launcher contract: docs/specs/deprecated-agent.md
+# (§Shim contract) in nsheaps/agents.
+
+set -euo pipefail
+
+REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+
+# --- Resolve AGENT_NAME from agent.yaml --------------------------------------
+# Read with grep+sed (NOT yq). By the time this shim runs, bin/start-agent has
+# reset PATH to a clean minimal PATH and mise install dirs are NOT yet active,
+# so yq is unavailable. We only need the single `name:` scalar here. (yq
+# dependency was removed 2026-05-20 after a shim-restart failure.)
+AGENT_NAME="$(grep -E '^[[:space:]]*name:[[:space:]]*' "$REPO_DIR/agent.yaml" 2>/dev/null | head -1 | sed -E 's/^[[:space:]]*name:[[:space:]]*//; s/[[:space:]]*$//; s/^"(.*)"$/\1/; s/^'"'"'(.*)'"'"'$/\1/')"
+if [[ -z "${AGENT_NAME:-}" || "$AGENT_NAME" == "{{AGENT_NAME}}" ]]; then
+  echo "fatal: set a real 'name:' in $REPO_DIR/agent.yaml (found: '${AGENT_NAME:-<empty>}')" >&2
+  exit 1
+fi
+
+# --- Resolve the canonical launcher ------------------------------------------
+# The launcher currently ships as a bash script in the nsheaps/agents checkout
+# (apps/agent-cli/bin/deprecated-agent), but is slated to become a compiled /
+# installed binary. This resolution order is forward-compatible with that move:
+#
+#   1. $AGENT_LAUNCHER_BIN          — explicit override (set in .env.local / CI)
+#   2. an installed binary on PATH  — the future compiled distribution
+#   3. $AGENTS_REPO_DIR/...         — explicit checkout location
+#   4. sibling-checkout convention  — ../agents next to this repo
+#
+# Override any of these by exporting AGENT_LAUNCHER_BIN or AGENTS_REPO_DIR in
+# $AGENT_HOME_DIR/.env.local (see docs/setup/01-quickstart.md).
+INSTALLED_BIN_NAMES=(agent-cli nsheaps-agent agent-launcher)
+
+resolve_launcher() {
+  # 1. explicit binary override
+  if [[ -n "${AGENT_LAUNCHER_BIN:-}" ]]; then
+    printf '%s\n' "$AGENT_LAUNCHER_BIN"
+    return 0
+  fi
+  # 2. installed/compiled binary on PATH (future distribution)
+  local name
+  for name in "${INSTALLED_BIN_NAMES[@]}"; do
+    if command -v "$name" >/dev/null 2>&1; then
+      command -v "$name"
+      return 0
+    fi
+  done
+  # 3. explicit agents checkout
+  if [[ -n "${AGENTS_REPO_DIR:-}" && -x "$AGENTS_REPO_DIR/apps/agent-cli/bin/deprecated-agent" ]]; then
+    printf '%s\n' "$AGENTS_REPO_DIR/apps/agent-cli/bin/deprecated-agent"
+    return 0
+  fi
+  # 4. sibling checkout (../agents)
+  if [[ -x "$REPO_DIR/../agents/apps/agent-cli/bin/deprecated-agent" ]]; then
+    printf '%s\n' "$(cd "$REPO_DIR/../agents/apps/agent-cli/bin" && pwd -P)/deprecated-agent"
+    return 0
+  fi
+  return 1
+}
+
+if ! LAUNCHER="$(resolve_launcher)"; then
+  cat >&2 <<EOF
+fatal: could not locate the nsheaps/agents launcher.
+
+Tried (in order):
+  1. \$AGENT_LAUNCHER_BIN                                       (${AGENT_LAUNCHER_BIN:-<unset>})
+  2. an installed binary on PATH: ${INSTALLED_BIN_NAMES[*]}
+  3. \$AGENTS_REPO_DIR/apps/agent-cli/bin/deprecated-agent      (AGENTS_REPO_DIR=${AGENTS_REPO_DIR:-<unset>})
+  4. $REPO_DIR/../agents/apps/agent-cli/bin/deprecated-agent
+
+Fix: install the agents launcher, or export AGENTS_REPO_DIR (or
+AGENT_LAUNCHER_BIN) in \$AGENT_HOME_DIR/.env.local. See docs/setup/01-quickstart.md.
+EOF
+  exit 1
+fi
+
+exec "$LAUNCHER" "$AGENT_NAME" "$REPO_DIR" "$@"

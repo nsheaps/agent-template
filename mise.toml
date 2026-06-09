@@ -1,0 +1,23 @@
+[settings]
+legacy_version_file = false
+
+[tools]
+# --- custom / org tooling ---------------------------------------------------
+# Pin claude-code to a known-good version (bump deliberately, not "latest", so
+# launcher behavior is reproducible). depends=node so the npm backend resolves.
+"npm:@anthropic-ai/claude-code" = { version = "2.1.138", depends = "node" }
+# op-exec: 1Password secret injector used by bin/lib/op-inject.sh
+"github:nsheaps/op-exec" = "0.1.0"
+# claude-utils: provides claude-patch-channels (binary patcher) + shared libs
+"github:nsheaps/claude-utils" = "0.12.19"
+
+# --- linters ----------------------------------------------------------------
+"npm:prettier" = "latest"
+"npm:eslint" = "latest"
+
+# --- base toolchain ---------------------------------------------------------
+gh = "latest"
+jq = "latest"
+yq = "latest"
+node = "lts"
+bun = "latest"

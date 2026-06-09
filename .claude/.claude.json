@@ -1,0 +1,12 @@
+{
+  "hasCompletedOnboarding": true,
+  "bypassPermissionsModeAccepted": true,
+  "theme": "dark",
+  "projects": {
+    "{{REPO_ABS_PATH}}": {
+      "hasTrustDialogAccepted": true,
+      "hasClaudeMdExternalIncludesApproved": true,
+      "hasCompletedProjectOnboarding": true
+    }
+  }
+}

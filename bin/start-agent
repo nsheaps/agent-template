@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+# start-agent — inner agent process entrypoint.
+#
+# Resets PATH to a clean baseline and execs the legacy launcher
+# (`bin/agent --no-tmux`) for the actual restart loop. This is the bug fix
+# documented in docs/specs/start-agent.md (R4): without a clean baseline,
+# the parent shell's stale claude-utils install dir survives across direnv
+# reactivation and `patch_claude_cli` resolves the wrong patcher version.
+#
+# Usage:
+#   bin/start-agent               # run the agent loop in this terminal (no tmux)
+#   bin/start-agent -h | --help   # print this help
+#
+# Used by:
+#   - bin/run-agent              (creates a tmux session that runs this script)
+#   - bin/run-and-attach-agent   (same, plus auto-attach)
+#   - direct invocation when running headless under a process manager
+#
+# TODO (system-service migration): when the agent runner becomes a systemd
+# unit, this script becomes the unit's ExecStart. PATH baseline moves to
+# `Environment=PATH=...` in the unit file; the snapshot logic below goes away.
+# See docs/specs/start-agent.md § R4 TODO.
+
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+start-agent — inner agent process entrypoint
+
+Usage:
+  bin/start-agent               Run the agent restart loop in this terminal.
+  bin/start-agent -h | --help   Print this help.
+
+Resets PATH to a known-clean baseline before delegating to bin/agent --no-tmux.
+That gives mise + direnv a fresh baseline on every launch and prevents the
+parent shell's stale claude-utils install dir from winning over the
+mise-pinned version.
+
+Spec: docs/specs/start-agent.md
+EOF
+}
+
+case "${1:-}" in
+  -h|--help) usage; exit 0 ;;
+esac
+
+REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+
+# Clean PATH baseline. Includes the dirs that hold mise/direnv/tmux on this
+# host. Deliberately small and explicit — anything mise/direnv need to add on
+# top of this is their job, not ours. If mise lives elsewhere on a future
+# host, add it here (no globbing, no parent-PATH inheritance).
+CLEAN_PATH="$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin"
+
+# Pre-install mise tools BEFORE bin/agent starts. Without this, bin/agent's
+# Step 2b sources claude-utils lib via `command -v claude-patch-channels` at
+# a point where a freshly-bumped mise version isn't installed yet — so
+# resolution falls through to whatever else is on PATH (e.g. a homebrew
+# claude-utils/0.12.3), and the lib comes from the wrong version.
+# bin/agent's later direnv step also calls `mise install`, but by then the
+# lib has already been sourced. Doing it here closes that gap.
+# Best-effort: failure is non-fatal — bin/agent will still try to install
+# inside direnv. Errors print to stderr; the launcher log captures them
+# once bin/agent takes over.
+PATH="$CLEAN_PATH" sh -c "cd '$REPO_DIR' && mise install -y" || true
+
+exec env PATH="$CLEAN_PATH" bash "$REPO_DIR/bin/agent" --no-tmux

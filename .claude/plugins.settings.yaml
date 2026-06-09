@@ -1,0 +1,48 @@
+# Per-agent plugin configuration (project scope — wins over user/plugin defaults).
+# Keys are camelCase. See ai-mktpl docs/PLUGIN_SCHEMA.md and the per-plugin READMEs.
+#
+# NOTE: this instance is wired to the **Agent-Jack** 1Password vault + GitHub App
+# so the template can run/authenticate as Jack for testing. To turn this back
+# into a generic template, swap every `Agent-Jack` → your vault (convention
+# `Agent-<Name>`) and `github--app--jack` → your GitHub App item.
+
+# --- 1Password secret injection (see docs/setup/02-1password.md) -------------
+# The op-exec items are resolved at session start and injected as env vars.
+# ENVIRONMENT is a "manifest" item whose field values may themselves be op://
+# references (resolved recursively). The github--app--jack item carries the
+# GitHub App id / installation id / private key the github-app plugin needs.
+1pass:
+  opExec:
+    items:
+      - "op://Agent-Jack/ENVIRONMENT"
+      - "op://Agent-Jack/github--app--jack"
+    targets:
+      - envLocal # persist to $AGENT_HOME_DIR/.env.local (survives sessions)
+      - sessionStartBashEnv # append to $CLAUDE_ENV_FILE (this session)
+    recursiveResolve: true
+
+# --- GitHub App identity (see docs/setup/03-github-app.md) -------------------
+# ref points at the 1Password item holding GITHUB_APP_ID, GITHUB_INSTALLATION_ID,
+# and GITHUB_APP_PRIVATE_KEY. autoGitConfig sets GIT_AUTHOR_*/GIT_COMMITTER_* to
+# the bot identity so commits are attributed to the App's bot login.
+github-app:
+  enabled: true
+  autoGitConfig: true
+  ref: "op://Agent-Jack/github--app--jack"
+
+# --- gh CLI (managed by mise, not auto-installed by the plugin) --------------
+github:
+  autoInstall: false
+
+# --- mise (auto-install + trust tools from mise.toml on session start) -------
+mise:
+  autoInstallTools: true
+  autoTrust: true
+
+# --- task-utils (Task-before-edit discipline). singleTaskBlocking off so the
+#     agent isn't hard-blocked when no Task is in progress (matches Alex). ----
+task-utils:
+  enabled: true
+  singleTaskBlocking: false
+  requireValidationSteps: true
+  requireInProgress: true

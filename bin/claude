@@ -1,0 +1,111 @@
+#!/usr/bin/env bash
+# claude — agent-aware claude wrapper. OWNS patching.
+#
+# When the handler runs `cd <repo> && claude`, direnv has already added
+# <repo>/bin to PATH (see rc.d/05_add-bin-to-path.sh), so this wrapper
+# resolves first. bin/agent's restart loop ALSO calls plain `claude`,
+# resolving here. Either way, this wrapper:
+#   1. Exports the per-agent env (AGENT_NAME, AGENT_HOME_DIR, etc.)
+#   2. ONLY patches when called with `--force` (or `--force-patch`) as the
+#      first argument. Otherwise execs the existing patched symlink (if
+#      valid) or falls back to unpatched claude. The launcher (bin/agent)
+#      decides when to force a patch — at most once per iteration.
+#   3. exec's the patched binary via the stable symlink (or unpatched as fallback)
+#
+# Patcher uniqueness model (Nate, Discord 2026-05-06 04:58Z):
+#   bin/patched/<version>/claude.<epoch>   (unique per launch, gitignored)
+#   bin/claude-patched -> latest patched   (gitignored, re-targeted atomically)
+#
+# Patch policy update (Nate, Discord 2026-05-15 02:47Z):
+#   - default: NO patch on invocation; exec existing symlink or unpatched
+#   - --force / --force-patch: patch once + relink + exec
+#   - launcher gates force via --force-patch (default false) and
+#     --patch-if-untested (default true); see bin/agent
+#
+# This wrapper is INTENTIONALLY minimal — no op-exec, no marketplace
+# bootstrap, no .claude.json seeding. Those are bin/agent's job. This
+# is for handler-side manual invocation AND bin/agent's exec target.
+#
+# Spec: docs/specs/start-agent.md (companion to bin/agent)
+
+set -euo pipefail
+
+REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+
+# Resolve AGENT_NAME — env override wins, else read from <repo>/agent.yaml.
+# shellcheck source=lib/agent-name.sh
+source "$REPO_DIR/bin/lib/agent-name.sh"
+agent_name_resolve || exit 1
+
+# Per-agent paths + claude env exports — shared with bin/agent via the lib.
+# shellcheck source=lib/agent-env.sh
+source "$REPO_DIR/bin/lib/agent-env.sh"
+agent_env_export
+export AGENT_DEBUG="${AGENT_DEBUG:-*}"
+
+# shellcheck source=lib/claude-patch.sh
+source "$REPO_DIR/bin/lib/claude-patch.sh"
+
+# Resolve the mise-pinned claude binary. If mise can't, we have no
+# unpatched fallback either — exit hard.
+CLAUDE_BIN="$(claude_patch_resolve_bin)" || {
+  echo "ERROR: mise could not resolve claude (run 'mise install' in $REPO_DIR)" >&2
+  exit 1
+}
+CLAUDE_VERSION="$(claude_patch_extract_version "$CLAUDE_BIN")" || CLAUDE_VERSION="unknown"
+
+# Unique-per-launch output path. LAUNCHER_EPOCH is exported by bin/agent
+# (matching launcher.<epoch>.log). Handler-side `cd <repo> && claude`
+# falls through to date +%s.
+LAUNCHER_EPOCH="${LAUNCHER_EPOCH:-$(date +%s)}"
+PATCHED_PATH="$(claude_patch_path_for_version "$CLAUDE_VERSION" "$LAUNCHER_EPOCH")"
+
+# Stable symlink the launcher (and this wrapper) exec.
+LINK_PATH="$(claude_patch_symlink_path)"
+
+# PATCH POLICY (Nate, Discord 2026-05-15 02:47Z):
+#   bin/claude NEVER patches on its own. Patching is exclusively triggered
+#   by the caller passing `--force` (or `--force-patch`) as the FIRST arg.
+#   Without that flag, we exec the existing patched symlink (if valid) or
+#   fall back to unpatched claude. The agent launcher is responsible for
+#   deciding when a patch is needed (at most once per iteration, gated on
+#   --force-patch=true or --patch-if-untested=true with version-untested).
+#
+# Drop the broken symlink case unconditionally so the fallback logic later
+# can cleanly choose between LINK_PATH and CLAUDE_BIN.
+force_patch=false
+if [[ "${1:-}" == "--force" || "${1:-}" == "--force-patch" ]]; then
+  force_patch=true
+  shift
+fi
+if [[ -L "$LINK_PATH" && ! -e "$LINK_PATH" ]]; then
+  rm -f "$LINK_PATH"
+fi
+
+if [[ "$force_patch" == true ]]; then
+  if patcher="$(claude_patch_resolve_patcher)"; then
+    mkdir -p "$(dirname "$PATCHED_PATH")"
+    echo "[bin/claude] --force: patching $CLAUDE_BIN -> $PATCHED_PATH" >&2
+    if "$patcher" --binary "$CLAUDE_BIN" --output "$PATCHED_PATH" >&2 \
+        && [[ -x "$PATCHED_PATH" ]]; then
+      ln -sfn "$PATCHED_PATH" "$LINK_PATH"
+      echo "[bin/claude] Linked $LINK_PATH -> $PATCHED_PATH" >&2
+    else
+      echo "[bin/claude] WARN: patcher failed (or output missing/non-exec)" >&2
+      # Don't touch LINK_PATH — if it was valid before we'll fall back to it.
+    fi
+  else
+    echo "[bin/claude] WARN: claude-patch-channels not found — skipping patch" >&2
+  fi
+fi
+
+# Prefer the symlink (freshly relinked OR pre-existing from a prior boot
+# whose patch survived even though this boot's patch failed).
+if [[ -e "$LINK_PATH" && -x "$LINK_PATH" ]]; then
+  exec "$LINK_PATH" "$@"
+fi
+
+# Last resort: unpatched mise claude. DevChannelsDialog auto-accept patch
+# is NOT applied — DevChannelsDialog may appear on dev-channel plugin loads.
+echo "[bin/claude] WARN: no patched binary available; exec'ing unpatched $CLAUDE_BIN" >&2
+exec "$CLAUDE_BIN" "$@"

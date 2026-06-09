@@ -1,0 +1,215 @@
+#!/usr/bin/env bash
+# install-plugins — bulk-install/update/prune Claude Code plugins from settings.json.
+#
+# - Installs/updates every plugin in .claude/settings.json `enabledPlugins`,
+#   preserving its existing scope (project if unknown, since most start there).
+# - Prunes any installed plugin NOT in enabledPlugins (uninstalls at its scope).
+# - Classifies each as installed / updated / up-to-date / pruned / failed via
+#   `installed_plugins.json` snapshot before/after (catches updates that re-fetch
+#   without bumping the version string).
+#
+# Usage: install-plugins [--verbose|-v] [--no-prune]
+
+set -euo pipefail
+
+VERBOSE=0
+PRUNE=1
+for arg in "$@"; do
+  case "$arg" in
+    -v|--verbose) VERBOSE=1 ;;
+    --no-prune) PRUNE=0 ;;
+    -h|--help) sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) echo "Unknown arg: $arg" >&2; exit 2 ;;
+  esac
+done
+
+REPO_DIR="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}"
+USER_CFG="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+PARALLEL="${INSTALL_PLUGINS_PARALLEL:-4}"  # 8 hit concurrency bugs writing installed_plugins.json; 4 is safe
+INSTALLED_FILE="$USER_CFG/plugins/installed_plugins.json"
+
+# Union enabledPlugins across all available settings files (user + project,
+# regular + .local), so plugins enabled only at user scope are honored too.
+# Order matches claude's load order; values are OR'd (any file with `true` wins).
+SETTINGS_FILES=(
+  "$USER_CFG/settings.json"
+  "$USER_CFG/settings.local.json"
+  "$REPO_DIR/.claude/settings.json"
+  "$REPO_DIR/.claude/settings.local.json"
+)
+[[ -f "$REPO_DIR/.claude/settings.json" ]] || { echo "ERROR: $REPO_DIR/.claude/settings.json not found" >&2; exit 1; }
+
+# Refresh marketplace manifests (cheap; updates pinned commits).
+claude plugin marketplace update >/dev/null 2>&1 || true
+
+# Snapshot: emit "id\tscope\tversion\tlastUpdated" rows for plugins relevant
+# to THIS run. Claude stores ALL installs (user AND project) in the user-level
+# installed_plugins.json; project-scope rows carry a .projectPath field.
+# We include:
+#   - rows with scope=user (truly user-installed), AND
+#   - rows with scope=project AND projectPath==REPO_DIR (this project only).
+# Skipped: scope=project rows for OTHER projects — not ours to manage/prune.
+snapshot() {
+  if [[ -f "$INSTALLED_FILE" ]]; then
+    jq -r --arg repo "$REPO_DIR" '
+      .plugins | to_entries[] | .key as $id | .value[]
+      | select(.scope == "user" or (.scope == "project" and (.projectPath // "") == $repo))
+      | "\($id)\t\(.scope)\t\(.version // "")\t\(.lastUpdated // "")"
+    ' "$INSTALLED_FILE" 2>/dev/null
+  fi
+}
+
+# Maps keyed by "id|scope".
+declare -A BEFORE_VER BEFORE_TS BEFORE_SCOPES
+while IFS=$'\t' read -r id scope ver ts; do
+  [[ -z "$id" ]] && continue
+  BEFORE_VER["$id|$scope"]="$ver"
+  BEFORE_TS["$id|$scope"]="$ts"
+  BEFORE_SCOPES["$id"]="${BEFORE_SCOPES[$id]:-}$scope "
+done < <(snapshot)
+
+# enabledPlugins: keys where value === true in ANY settings file (union).
+declare -A ENABLED_SET
+for f in "${SETTINGS_FILES[@]}"; do
+  [[ -f "$f" ]] || continue
+  while IFS= read -r id; do
+    [[ -n "$id" ]] && ENABLED_SET["$id"]=1
+  done < <(jq -r '.enabledPlugins // {} | to_entries[] | select(.value == true) | .key' "$f" 2>/dev/null)
+done
+ENABLED=()
+for id in "${!ENABLED_SET[@]}"; do ENABLED+=("$id"); done
+
+# For each enabled plugin, pick a scope to install at — prefer existing project,
+# else existing user, else default project (Nate: "almost everything is at project scope").
+pick_scope() {
+  local id="$1"
+  local scopes="${BEFORE_SCOPES[$id]:-}"
+  [[ "$scopes" == *"project"* ]] && { echo "project"; return; }
+  [[ "$scopes" == *"user"*    ]] && { echo "user";    return; }
+  echo "project"
+}
+
+# Build install plan: "id\tscope" lines (one scope per enabled id).
+INSTALL_PLAN_FILE=$(mktemp)
+declare -A WANT_SCOPE
+for id in "${ENABLED[@]}"; do
+  WANT_SCOPE["$id"]="$(pick_scope "$id")"
+  printf '%s\t%s\n' "$id" "${WANT_SCOPE[$id]}"
+done > "$INSTALL_PLAN_FILE"
+
+# Build prune plan: every (id, scope) in installed_plugins.json that is either
+#   (a) id not in enabledPlugins, OR
+#   (b) id IS enabled but at a scope other than the one we'll install to (dedupe).
+PRUNE_PLAN_FILE=$(mktemp)
+if [[ $PRUNE -eq 1 ]]; then
+  for key in "${!BEFORE_VER[@]}"; do
+    id="${key%|*}"
+    scope="${key#*|}"
+    if [[ -z "${ENABLED_SET[$id]:-}" ]]; then
+      printf '%s\t%s\n' "$id" "$scope"
+    elif [[ "${WANT_SCOPE[$id]}" != "$scope" ]]; then
+      printf '%s\t%s\n' "$id" "$scope"
+    fi
+  done > "$PRUNE_PLAN_FILE"
+fi
+
+# Run installs in parallel (one xargs handles both arg cols via sh -c).
+xargs -P "$PARALLEL" -L1 sh -c 'claude plugin install "$0" --scope "$1" >/dev/null 2>&1 || echo "FAIL_INSTALL $0 $1" >&2' < "$INSTALL_PLAN_FILE"
+
+# Run prunes in parallel (only if any).
+if [[ -s "$PRUNE_PLAN_FILE" ]]; then
+  xargs -P "$PARALLEL" -L1 sh -c 'claude plugin uninstall "$0" --scope "$1" >/dev/null 2>&1 || echo "FAIL_PRUNE $0 $1" >&2' < "$PRUNE_PLAN_FILE"
+fi
+
+# Snapshot AFTER.
+declare -A AFTER_VER AFTER_TS
+while IFS=$'\t' read -r id scope ver ts; do
+  [[ -z "$id" ]] && continue
+  AFTER_VER["$id|$scope"]="$ver"
+  AFTER_TS["$id|$scope"]="$ts"
+done < <(snapshot)
+
+# Classify enabled plugins.
+INSTALLED=()
+UPDATED=()
+UP_TO_DATE=()
+FAILED=()
+while IFS=$'\t' read -r id scope; do
+  key="$id|$scope"
+  bver="${BEFORE_VER[$key]:-}"
+  bts="${BEFORE_TS[$key]:-}"
+  aver="${AFTER_VER[$key]:-}"
+  ats="${AFTER_TS[$key]:-}"
+  if [[ -z "$aver" ]]; then
+    FAILED+=("$id [$scope]")
+  elif [[ -z "$bver" ]]; then
+    INSTALLED+=("$id [$scope] → $aver")
+  elif [[ "$bts" != "$ats" || "$bver" != "$aver" ]]; then
+    UPDATED+=("$id [$scope] $bver → $aver")
+  else
+    UP_TO_DATE+=("$id [$scope] $aver")
+  fi
+done < "$INSTALL_PLAN_FILE"
+
+# Classify prunes (anything that disappeared from AFTER).
+PRUNED=()
+PRUNE_FAILED=()
+if [[ -s "$PRUNE_PLAN_FILE" ]]; then
+  while IFS=$'\t' read -r id scope; do
+    key="$id|$scope"
+    if [[ -n "${AFTER_VER[$key]:-}" ]]; then
+      PRUNE_FAILED+=("$id [$scope]")
+    else
+      PRUNED+=("$id [$scope] (was ${BEFORE_VER[$key]:-?})")
+    fi
+  done < "$PRUNE_PLAN_FILE"
+fi
+
+rm -f "$INSTALL_PLAN_FILE" "$PRUNE_PLAN_FILE"
+
+# Report.
+TOTAL=${#ENABLED[@]}
+N_I=${#INSTALLED[@]}
+N_U=${#UPDATED[@]}
+N_OK=${#UP_TO_DATE[@]}
+N_F=${#FAILED[@]}
+N_P=${#PRUNED[@]}
+N_PF=${#PRUNE_FAILED[@]}
+
+if [[ $N_I -eq 0 && $N_U -eq 0 && $N_F -eq 0 && $N_P -eq 0 && $N_PF -eq 0 ]]; then
+  echo "All $TOTAL enabled plugins are up to date."
+else
+  echo "Processed $TOTAL enabled, ${#PRUNED[@]} pruned: $N_I installed, $N_U updated, $N_OK already current, $N_P pruned, $N_F install-failed, $N_PF prune-failed."
+  echo
+  if [[ $N_I -gt 0 ]]; then
+    echo "Installed ($N_I):"
+    printf '  - %s\n' "${INSTALLED[@]}"
+  fi
+  if [[ $N_U -gt 0 ]]; then
+    echo "Updated ($N_U):"
+    printf '  - %s\n' "${UPDATED[@]}"
+  fi
+  if [[ $N_P -gt 0 ]]; then
+    echo "Pruned ($N_P):"
+    printf '  - %s\n' "${PRUNED[@]}"
+  fi
+  if [[ $N_F -gt 0 ]]; then
+    echo "Install failed ($N_F):"
+    printf '  - %s\n' "${FAILED[@]}"
+  fi
+  if [[ $N_PF -gt 0 ]]; then
+    echo "Prune failed ($N_PF):"
+    printf '  - %s\n' "${PRUNE_FAILED[@]}"
+  fi
+fi
+
+if [[ $VERBOSE -eq 1 && $N_OK -gt 0 ]]; then
+  echo
+  echo "Up to date ($N_OK):"
+  printf '  - %s\n' "${UP_TO_DATE[@]}"
+fi
+
+if [[ $N_I -gt 0 || $N_U -gt 0 || $N_P -gt 0 ]]; then
+  echo
+  echo "Run /reload-plugins in your console to reload the just-installed plugins"
+fi

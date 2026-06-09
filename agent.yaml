@@ -1,0 +1,11 @@
+# Agent identity — the SOLE source of truth for AGENT_NAME.
+#
+# Read by bin/agent, bin/run-agent, bin/run-and-attach-agent, bin/attach-agent,
+# and bin/start-agent via a minimal grep+sed parser (NOT yq), so keep this as a
+# single top-level `name:` scalar. AGENT_NAME is never inherited from the
+# environment (prevents cross-agent contamination on a shared tmux server).
+#
+# REQUIRED: replace {{AGENT_NAME}} with your agent's short, lowercase slug
+# (e.g. "jordan"). Everything per-agent (XDG home at ~/.agents/<name>, tmux
+# session name, 1Password vault) is derived from this value.
+name: {{AGENT_NAME}}
