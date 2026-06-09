@@ -88,7 +88,9 @@
     "statusline@ai-mktpl": false,
     "task-parallelization@ai-mktpl": false,
     "todo-sync@ai-mktpl": false,
-    "word-vomit@ai-mktpl": false
+    "word-vomit@ai-mktpl": false,
+    "playwright@claude-plugins-official": true,
+    "task-utils@agents": true
   },
   "extraKnownMarketplaces": {
     "ai-mktpl": {
