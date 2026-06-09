@@ -1,0 +1,25 @@
+# Environment / secrets (NEVER commit these)
+.env
+.env.local
+.env.*.local
+
+# Claude Code — runtime/local state
+.claude/settings.local.json
+.claude/rules/upstream--*.md
+.claude/tmp
+.claude/logs/
+.claude/scheduled_tasks.lock
+
+# Patched Claude binary (regenerated each launch)
+bin/claude-patched
+bin/patched/
+
+# Local tool binaries
+bin/.local/
+
+# Node
+**/node_modules
+
+# OS
+.DS_Store
+Thumbs.db

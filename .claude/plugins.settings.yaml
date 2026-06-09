@@ -1,0 +1,38 @@
+# Per-agent plugin configuration (project scope — wins over user/plugin defaults).
+# Keys are camelCase. See ai-mktpl docs/PLUGIN_SCHEMA.md and the per-plugin READMEs.
+#
+# TEMPLATE: replace every {{...}} placeholder. The 1Password vault + item names
+# below are the ONLY agent-specific values the launcher needs to inject secrets.
+
+# --- 1Password secret injection (see docs/setup/02-1password.md) -------------
+# op-inject.sh (launcher) and the 1pass plugin's SessionStart hook both read
+# these item refs and inject every field as an env var. The ENVIRONMENT item is
+# a "manifest": its field values may themselves be op:// references, resolved
+# recursively. Vault convention: "Agent-{{AGENT_DISPLAY_NAME}}".
+1pass:
+  opExec:
+    items:
+      - "op://{{OP_VAULT}}/ENVIRONMENT"
+      - "op://{{OP_VAULT}}/{{GITHUB_APP_ITEM}}"
+    targets:
+      - envLocal # persist to $AGENT_HOME_DIR/.env.local (survives sessions)
+      - sessionStartBashEnv # append to $CLAUDE_ENV_FILE (this session)
+  recursiveResolve: true
+
+# --- GitHub App identity (see docs/setup/03-github-app.md) -------------------
+# Points at the 1Password item holding GITHUB_APP_ID, GITHUB_INSTALLATION_ID,
+# and GITHUB_APP_PRIVATE_KEY. autoGitConfig sets GIT_AUTHOR_*/GIT_COMMITTER_* to
+# the bot identity so commits are attributed to <bot-login>.
+github-app:
+  enabled: true
+  autoGitConfig: true
+  ref: "op://{{OP_VAULT}}/{{GITHUB_APP_ITEM}}"
+
+# --- gh CLI (managed by mise, not auto-installed by the plugin) --------------
+github:
+  autoInstall: false
+
+# --- mise (auto-install + trust tools from mise.toml on session start) -------
+mise:
+  autoInstallTools: true
+  autoTrust: true

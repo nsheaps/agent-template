@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+# attach-agent — attach to a running agent's tmux session.
+#
+# Does NOT create the session if it's missing — use bin/run-agent or
+# bin/run-and-attach-agent for that. Loops so detaching drops back to a
+# watcher that reattaches when the session reappears (or sleeps until then).
+# Ctrl+C exits.
+#
+# Usage:
+#   bin/attach-agent              # attach (loop) to a running agent
+#   bin/attach-agent -h | --help  # print this help
+#
+# Spec: docs/specs/start-agent.md
+
+# todo use mise to install gum from charmbracelet to improve the output here
+# (only temporary till we move to nsheaps/agents)
+
+set -uo pipefail
+
+usage() {
+  cat <<'EOF'
+attach-agent — attach to a running agent's tmux session
+
+Usage:
+  bin/attach-agent              Attach to the running agent. Sleeps and retries
+                                if the session is not up. Ctrl+C to exit.
+  bin/attach-agent -h | --help  Print this help.
+
+To start the agent: bin/run-agent
+To start and attach in one shot: bin/run-and-attach-agent
+
+Spec: docs/specs/start-agent.md
+EOF
+}
+
+case "${1:-}" in
+  -h|--help) usage; exit 0 ;;
+esac
+
+REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=./lib/tmux.sh
+source "$REPO_DIR/bin/lib/tmux.sh"
+
+# Read from <repo>/agent.yaml (key: name) — see bin/run-agent for rationale.
+AGENT_NAME="$(grep -E '^[[:space:]]*name:[[:space:]]*' "$REPO_DIR/agent.yaml" 2>/dev/null | head -1 | sed -E 's/^[[:space:]]*name:[[:space:]]*//; s/[[:space:]]*$//; s/^"(.*)"$/\1/; s/^'"'"'(.*)'"'"'$/\1/')"
+if [[ -z "$AGENT_NAME" ]]; then
+  echo "ERROR: could not read 'name:' from $REPO_DIR/agent.yaml" >&2
+  exit 1
+fi
+export AGENT_NAME
+
+handle_interrupt() {
+  echo "Ctrl+C pressed. Exiting..."
+  KEEP_LOOPING=0
+  exit 0
+}
+trap handle_interrupt SIGINT
+
+KEEP_LOOPING=1
+while [[ $KEEP_LOOPING -eq 1 ]]; do
+  if ! tmux_session_exists "$AGENT_NAME"; then
+    echo "tmux session for ${AGENT_NAME} not found. Retrying after 3s..."
+    sleep 3
+    continue
+  else
+    tmux_attach_session "$AGENT_NAME"
+    echo "tmux session for ${AGENT_NAME} exited or detached. Reattaching in 3s..."
+  fi
+  sleep 3
+done

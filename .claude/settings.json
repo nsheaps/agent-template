@@ -1,0 +1,187 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "env": {
+    "DISCORD_ALLOW_BOTS": "true"
+  },
+  "attribution": {
+    "commit": "\nCo-Authored-By: {{AGENT_DISPLAY_NAME}} <{{BOT_LOGIN}}+{{GITHUB_INSTALLATION_ID}}@users.noreply.github.com>"
+  },
+  "permissions": {
+    "allow": [
+      "Skill",
+      "Glob",
+      "Grep",
+      "WebSearch",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:*.github.com)",
+      "WebFetch(domain:*.githubusercontent.com)",
+      "WebFetch(domain:anthropic.com)",
+      "WebFetch(domain:*.anthropic.com)",
+      "WebFetch(domain:claude.ai)",
+      "WebFetch(domain:*.claude.ai)",
+      "Bash(git log:*)",
+      "Bash(git diff:*)",
+      "Bash(git status:*)",
+      "Bash(git rev-parse:*)",
+      "Bash(git fetch:*)",
+      "Bash(git show:*)",
+      "Bash(git remote get-url:*)",
+      "Bash(git rm:*)",
+      "Bash(git mv:*)",
+      "Bash(git branch:*)",
+      "Bash(gh pr checks:*)",
+      "Bash(gh pr list:*)",
+      "Bash(gh pr view:*)",
+      "Bash(gh run list:*)",
+      "Bash(gh run view:*)",
+      "Bash(gh issue view:*)",
+      "Bash(gh issue list:*)",
+      "Bash(wc:*)",
+      "Bash(chmod:*)",
+      "Bash(readlink:*)",
+      "Bash(mkdir:*)",
+      "Bash(ls:*)"
+    ],
+    "deny": [
+      "Bash(rm -rf /:*)"
+    ],
+    "ask": [
+      "Bash(gh pr view --web:*)",
+      "Bash(rm -rf:*)",
+      "Bash(git push --force:*)",
+      "Bash(git push -f:*)",
+      "Bash(git push --force-with-lease:*)",
+      "Bash(git push --force-if-includes:*)"
+    ]
+  },
+  "statusLine": {
+    "type": "command",
+    "command": "bunx -y ccstatusline@latest",
+    "padding": 0
+  },
+  "enabledPlugins": {
+    "1pass@ai-mktpl": true,
+    "agentic-behavior@ai-mktpl": true,
+    "common-sense@ai-mktpl": true,
+    "dangerous-bypass@ai-mktpl": true,
+    "deep-research@ai-mktpl": true,
+    "discord@ai-mktpl": true,
+    "edit-utils@ai-mktpl": true,
+    "github@ai-mktpl": true,
+    "github-app@ai-mktpl": true,
+    "incident-tracker@ai-mktpl": true,
+    "mise@ai-mktpl": true,
+    "scm-utils@ai-mktpl": true,
+    "sdlc-utils@ai-mktpl": true,
+    "sequential-thinking@ai-mktpl": true,
+    "shared-lib@ai-mktpl": true,
+    "skills-maintenance@ai-mktpl": true,
+    "telegram@ai-mktpl": true,
+    "plugin-dev@claude-plugins-official": true,
+    "agent-tab-titles@ai-mktpl": false,
+    "code-simplifier@ai-mktpl": false,
+    "context-bloat-prevention@ai-mktpl": false,
+    "git-spice@ai-mktpl": false,
+    "memory-manager@ai-mktpl": false,
+    "permissions-sync@ai-mktpl": false,
+    "self-terminate@ai-mktpl": false,
+    "statusline@ai-mktpl": false,
+    "task-parallelization@ai-mktpl": false,
+    "todo-sync@ai-mktpl": false,
+    "word-vomit@ai-mktpl": false
+  },
+  "extraKnownMarketplaces": {
+    "ai-mktpl": {
+      "source": {
+        "source": "github",
+        "repo": "nsheaps/ai-mktpl"
+      }
+    },
+    "ai-mktpl-edge": {
+      "source": {
+        "source": "github",
+        "repo": "nsheaps/ai-mktpl",
+        "ref": "edge"
+      }
+    },
+    "ai-mktpl-dev": {
+      "source": {
+        "source": "github",
+        "repo": "nsheaps/ai-mktpl",
+        "ref": "dev"
+      }
+    },
+    "ai-mktpl-stable": {
+      "source": {
+        "source": "github",
+        "repo": "nsheaps/ai-mktpl",
+        "ref": "stable"
+      }
+    },
+    "agents": {
+      "source": {
+        "source": "github",
+        "repo": "nsheaps/agents"
+      }
+    },
+    "agents-edge": {
+      "source": {
+        "source": "github",
+        "repo": "nsheaps/agents",
+        "ref": "edge"
+      }
+    },
+    "agents-dev": {
+      "source": {
+        "source": "github",
+        "repo": "nsheaps/agents",
+        "ref": "dev"
+      }
+    },
+    "agents-stable": {
+      "source": {
+        "source": "github",
+        "repo": "nsheaps/agents",
+        "ref": "stable"
+      }
+    }
+  },
+  "showThinkingSummaries": true,
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/block-claude-projects-md-writes.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "Agent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/force-background-agent.sh"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/git-commit-task-reminder.sh"
+          },
+          {
+            "type": "command",
+            "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/git-push-pr-title-reminder.sh"
+          }
+        ]
+      }
+    ]
+  }
+}

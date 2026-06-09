@@ -1,0 +1,11 @@
+# Agent env template — copied to $AGENT_HOME_DIR/.envrc on first launch.
+# This file uses bash shell syntax (NOT dotenv KEY=VALUE format), so consumers
+# must source it via bash (`source .envrc`), not via direnv's `dotenv`.
+#
+# Chain: this file sources $AGENT_HOME_DIR/.env.local (1pass-managed static creds).
+# Add non-secret defaults below the source line if needed.
+
+# shellcheck source=/dev/null
+if [ -r "${AGENT_HOME_DIR:?}/.env.local" ]; then
+  source "${AGENT_HOME_DIR}/.env.local"
+fi

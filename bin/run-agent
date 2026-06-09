@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+# run-agent — user-facing entrypoint for starting the agent.
+#
+# Idempotent: if the tmux session for this agent is already up, prints a
+# notice and exits 0. Otherwise creates a detached tmux session that runs
+# `bin/start-agent` (which handles the clean-PATH baseline + the restart
+# loop). Does NOT auto-attach — use `bin/attach-agent` for that.
+#
+# Usage:
+#   bin/run-agent                 # start the agent (no-op if already up)
+#   bin/run-agent -h | --help     # print this help
+#
+# Spec: docs/specs/start-agent.md
+# TODO (system-service migration): when the agent runner becomes a systemd
+# unit, this script shrinks to "is the unit active? if not,
+# `systemctl --user start agent-<name>`". The tmux logic goes away —
+# stdout/stderr land in journald instead. See spec § R4 TODO.
+
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+run-agent — start the agent (idempotent)
+
+Usage:
+  bin/run-agent                 Start the agent in a detached tmux session.
+                                If already running, prints a notice and exits.
+  bin/run-agent -h | --help     Print this help.
+
+To attach to a running agent: bin/attach-agent
+To start AND attach in one go: bin/run-and-attach-agent
+
+Spec: docs/specs/start-agent.md
+EOF
+}
+
+case "${1:-}" in
+  -h|--help) usage; exit 0 ;;
+esac
+
+REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=./lib/tmux.sh
+source "$REPO_DIR/bin/lib/tmux.sh"
+
+# Source of truth for the agent name: <repo>/agent.yaml (key: name).
+# Deliberately does NOT inherit AGENT_NAME from the parent shell — when
+# run from inside another agent's shell (e.g. Jack launches Alex),
+# inheriting would target the wrong tmux session. This is a user-facing
+# entrypoint that means "start the agent for THIS repo".
+AGENT_NAME="$(grep -E '^[[:space:]]*name:[[:space:]]*' "$REPO_DIR/agent.yaml" 2>/dev/null | head -1 | sed -E 's/^[[:space:]]*name:[[:space:]]*//; s/[[:space:]]*$//; s/^"(.*)"$/\1/; s/^'"'"'(.*)'"'"'$/\1/')"
+if [[ -z "$AGENT_NAME" ]]; then
+  echo "ERROR: could not read 'name:' from $REPO_DIR/agent.yaml" >&2
+  exit 1
+fi
+export AGENT_NAME
+
+if tmux_session_exists "$AGENT_NAME"; then
+  echo "agent ${AGENT_NAME} is already running; attach with bin/attach-agent"
+  exit 0
+fi
+
+echo "starting agent ${AGENT_NAME}…"
+tmux_make_session "$AGENT_NAME" "$REPO_DIR" "bash bin/start-agent"
+echo "started. attach with bin/attach-agent"
